@@ -1,0 +1,16 @@
+My recomendation:
+
+DON'T edit stuff in rootfs. This is 
+where the file system for the OS.
+
+
+=========
+Blocks - Folder where most of the blocks for this
+filesystem will probably be. This isn't a 
+guarntee, though.
+
+inode - Contains the inode and other data about
+the filesytem
+
+Readme - Read it all the way through and follow all
+instructions, right now.
