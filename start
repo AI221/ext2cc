@@ -61,14 +61,23 @@ local function charTableToString(_chartable)
     end
     return str
 end
-local 
-function stringToCharTable(_string)
+local function stringToCharTable(_string)
     local char = {}
     for i=1,#_string do
         char[i] = string.byte(string.sub(_string,i,i))
     end
     return char
 end
+local function getRealFileSize(_file)
+    local file = cfs.open(_file,"r")
+    if not file then
+        return 0
+    end
+    local len = #file.readAll()
+    file.close()
+    return len
+end
+
 ext2CC = { --Takes inspiration from EXT2, but is different in many ways. Its most prominent ext2 feature would be the inode table, present on all unix-style filesytems.
 new = function(s,_location)
     ----Input: String location, Number block size
@@ -103,7 +112,7 @@ new = function(s,_location)
     return self
 end,
 
-writeToBlock = function(self,_blocknum,_ammount,_what) --maybe move this and its following function to be outside and local?
+writeToBlock = function(self,_blocknum,_ammount,_what,__startAt) --maybe move this and its following function to be outside and local?
     ----Input: Number- The block number
     --Number ammount - Ammount to write
     --Table of Numbers - Binary of what to write
@@ -123,16 +132,16 @@ writeToBlock = function(self,_blocknum,_ammount,_what) --maybe move this and its
     end
     local file = cfs.open(realpath,"wb")
     for i=1,_ammount do
-    if _ammount >= i then
-        file.write(_what[i])
-    else
-        for o=1,i do  -- remove chars weve gone over
-        table.remove(_what,1)
+        file.write(_what[i+(_startAt or 0)])
+        if i % 100000 == 0 then -- if dividing 10000 by i will have no remainder then yield
+            os.queueEvent"oneYield"
+            os.pullEvent"oneYield"
         end
-        file.close()
-        return 0,_what
+
     end
-    end
+    --[[for o=1,_ammount do  -- remove chars weve gone over
+        table.remove(_what,1)
+    end]]
     file.close()
     return 0
 end,
@@ -177,8 +186,10 @@ getDirectory = function(self,_fakePath)
     end
     local err,folderInode = self:locateInInode(_fakePath)
     if err ~= 0 then
+       -- print"ExtErr"
         return err --pass on the error
-    elseif (self.inode[(_folderInode or -1)] or {}).type ~= 1 then
+    elseif (self.inode[(folderInode or -1)] or {}).type ~= 1 then
+       -- print"intErr"
         return 4
     end
     return 0,folderInode
@@ -248,24 +259,32 @@ write_wInode = function(self,_inodeID,_what)
     ----Input: Number - Inode ID of what to write to.
     ----Ouput: Number - Error code
     local myInode = self.inode[_inodeID]
-    myInode.blocks = myInode.blocks or {}
+    
+    myInode.fileSize = #_what
+
+    
+    myInode.blocks = myInode.blocks or {} -- Make a list of blocks potentially availiable for writing to.
     local blocks,hasUsedBlock = {}
     if myInode.blocks[1] then--if there's anything in here
-        table.insert(blocks,myInode.blocks[#myInode.blocks])
-        hasUsedBlock = true
+        table.insert(blocks,myInode.blocks[#myInode.blocks]) -- Add the last block of this current file
+        hasUsedBlock = true -- Make sure they know that this block doesn't need to be allocated  | Maybe redo this to delete everything this file has, add its blocks to freeBlocks, then probably reuse most of them
     end
     for i=1,#(self.blockInfo.freeBlocks or {}) do
-        table.insert(blocks,self.blockInfo.freeBlocks[i])
+        table.insert(blocks,self.blockInfo.freeBlocks[i]) -- Add all the free blocks
     end
+    local left = 0 -- funny story about accidently having this set to 1 here...
     for i=1,#blocks do
-        local freeSpace = cfs.getFreeSpace(self.blockInfo.blockLocations[blocks[i]])
-        if freeSpace > 3000 then
-            local ammountWrite = math.min(#_what,freeSpace-3000)
+        local freeSpace = cfs.getFreeSpace(self.blockInfo.blockLocations[blocks[i]])  +  getRealFileSize(self.blockInfo.blockLocations[blocks[i]]) -- for blocks that where previously occupied but then the file was deleted, and that block is on an almost-full drive. 
+        if (freeSpace > 3000)   then
+            local ammountWrite = math.min(#_what-left,freeSpace-3000)
             local err
-            err,_what = self:writeToBlock(blocks[i],ammountWrite,_what)
-            if err ~= 0 then 
+            --print("1 write: "..tostring(ammountWrite))
+            err = self:writeToBlock(blocks[i],ammountWrite,_what,left)
+            if err ~= 0 then --If there's an error, pass it on 
+                --print("errCode:"..tostring(err))
                 return err 
             end
+            left = left+ammountWrite
 
             if hasUsedBlock then
                 myInode.blocksSize[#myInode.blocksSize] = ammountWrite
@@ -276,10 +295,11 @@ write_wInode = function(self,_inodeID,_what)
             end
             for f=1,#self.blockInfo.freeBlocks do
                 if self.blockInfo.freeBlocks[f] == blocks[i] then
-                    table.remove(self.blockInfo.freeBlocks,f)
+                    print(table.remove(self.blockInfo.freeBlocks,f))                    
                 end
             end
-            if not _what then
+            if left >= #_what then -- if the _what table has been all written
+                --print"allDone"
                 self:writeInode() -- save the inode to disk
                 return 0
             end
@@ -289,13 +309,14 @@ write_wInode = function(self,_inodeID,_what)
         end
     end
     if cfs.getFreeSpace(self.location) > 3000 then
+        print"NEWBLOCKS"
         for i=1,10 do --make 10 new blocks because this saves time
             local newBlockNum = #self.blockInfo.blockLocations+1
             self.blockInfo.blockLocations[newBlockNum] = cfs.combine(self.location,"blocks/"..tostring(newBlockNum))
             self.blockInfo.freeBlocks[#self.blockInfo.freeBlocks+1] = newBlockNum
         end
         self:writeInode()
-        if #_what > 0 then
+        if left > 0 then
             if not self:write_wInode(_inodeID,_what) == 1 then
                 return 0 -- If this worked then we're good
             end--write the rest of it
@@ -328,19 +349,18 @@ write = function(self,_fakePath,_what,_type) ---Maybe make this return the inode
     --print(name.." : "..tostring(inodeID))
     
     if not inodeID then --need to make one!
-    inodeID = #self.inode+1
-    self.inode[inodeID] = {}
-    dirList[name] = inodeID 
-    --print(textutils.serialize(dirList))
-    
-    self:write_wInode(dirInode,stringToCharTable(textutils.serialize(dirList)))
-    --print"d"
-    
-    
+        inodeID = #self.inode+1
+        self.inode[inodeID] = {}
+        dirList[name] = inodeID 
+        --print(textutils.serialize(dirList))
+        
+        self:write_wInode(dirInode,stringToCharTable(textutils.serialize(dirList)))
+        --print"d"
+        
+        
     end
-        print(name.." : "..tostring(inodeID))
+        --print(name.." : "..tostring(inodeID))
     self.inode[inodeID] = self.inode[inodeID] or {}
-    self.inode[inodeID].fileSize = #_what
     self.inode[inodeID].type = _type or 0
     --self.inode[inodeID].temp = true --debug to see what inodes this was writing
     self.inode[inodeID].hardLinks = self.inode[inodeID].hardLinks or {}
@@ -355,7 +375,7 @@ read = function(self,_fakePath,_ammount)
     if err ~= 0 then --we've come across an error. pass it on down.
             return err
     end
-    print("in "..tostring(inodeID))
+    --print("in "..tostring(inodeID))
     return self:read_wInode(inodeID,_ammount)
 end,
 read_wInode = function(self, _inodeID,_ammount)
@@ -386,7 +406,45 @@ read_wInode = function(self, _inodeID,_ammount)
         
     
 end,
+delete_wInode = function(self,inodeID) -- rip
+    if inodeID == 2 then--um... no.
+        return 6
+    end
+    print"del"
+    if not self.inode[inodeID] then --well
+        return 
+    end
+    
+    local hardLinks = self.inode[inodeID].hardLinks
+    for i,link in pairs(hardLinks) do
+        print("h"..tostring(link))
+        local err,dirTable = self:listInDirectory_wInode(link)
+        for y,u in pairs(dirTable) do
+            print("y: "..tostring(y))
+            print("u"..tostring(u))
+            if u == inodeID then
+                dirTable[y] = nil
+                break
+            end
+        end
+        dirTable = stringToCharTable(textutils.serialize(dirTable))
+        self:write_wInode(link,dirTable)
+    end
+    local blocks = self.inode[inodeID].blocks
+    for i=1,#blocks do
+        self.blockInfo.freeBlocks[#self.blockInfo.freeBlocks+1] = blocks[i]
+    end
+    self.inode[inodeID] = nil
+    self:writeInode()
+    return 0
+end,
+        
+        
 writeInode = function(self)
+    ----Input:
+    ----Output:
+    ----Notes:
+    ---Writes the current inode to the inode table file.
     local file = cfs.open(cfs.combine(self.location,"inode"),"w")
     if not file then
         return 3
@@ -550,7 +608,13 @@ local fs = {
     list = function(_dir)
         ----Input: String- directory
         ----Output: Linear table-files in directory
-        local err,dirList = filesys:listInDirectory_wInode(2)--rootFS:getDirectory(_dir))
+        local err,folderInode = rootFS:getDirectory(_dir)
+        --print(folderInode)
+        fsAssert(err == 0,"Not a directory")
+        local err,dirList = filesys:listInDirectory_wInode(folderInode)
+        fsAssert(err == 0,"Not a directory")
+        fsAssert(type(dirList)=="table","Not a directory")
+        
         local linearDirList = {}
         for i,o in pairs(dirList) do --List directory gives us name:inode#. This converts to a linear table.
             linearDirList[#linearDirList+1]=i
@@ -583,6 +647,26 @@ local fs = {
             return false
         end
     end,
+    delete = function(_file)
+        local err,inodeID = rootFS:locateInInode(_file)
+        if not inodeID then
+            return
+        end
+        if rootFS.inode[inodeID].type == 1 then --TODO
+            local err,dirList = rootFS:listInDirectory_wInode(inodeID)
+            if not err then
+                
+            end
+        end 
+        local err = rootFS:delete_wInode(inodeID)
+        if err == 6 then
+            fsAssert(false,"Access denied")
+        end
+    end,
+    makeDir = function(_file) -- directories are just files
+        rootFS:write(_file,{123,125},1) --123 = "{", 125 = "}". 1 is type for directory.
+    end,
+        
     
     
     --------------------------------------------
@@ -611,7 +695,7 @@ local fs = {
             end
         end
         
-        if cfs.isDir( sDir ) then
+        if fs.isDir( sDir ) then
             local tResults = {}
             if bIncludeDirs and sPath == "" then
                 table.insert( tResults, "." )
@@ -623,11 +707,11 @@ local fs = {
                     table.insert( tResults, (bIncludeDirs and ".") or "./" )
                 end
             end
-            local tFiles = cfs.list( sDir )
+            local tFiles = fs.list( sDir )
             for n=1,#tFiles do
                 local sFile = tFiles[n]
                 if #sFile >= #sName and string.sub( sFile, 1, #sName ) == sName then
-                    local bIsDir = cfs.isDir( cfs.combine( sDir, sFile ) )
+                    local bIsDir = fs.isDir( cfs.combine( sDir, sFile ) )
                     local sResult = string.sub( sFile, #sName + 1 )
                     if bIsDir then
                         table.insert( tResults, sResult .. "/" )
@@ -650,7 +734,7 @@ local fs = {
     --END OF SNIPPETS FROM BIOS.LUA--
     ---------------------------------
     
-    
+    _ammount
     
 }
     
@@ -1082,5 +1166,6 @@ if not dev then
     file.close()
     f=load(shell,"shell","t",_G)
     f()]]
+    --term.redirect(term.native()) -- for my ridiculous print calls
     os.run({fs=realFS,loadfile = loadfile,os=os},"/rom/programs/shell")
 end
