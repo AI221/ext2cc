@@ -406,7 +406,7 @@ read_wInode = function(self, _inodeID,_ammount)
         
     
 end,
-delete_wInode = function(self,inodeID) -- rip
+delete_wInode = function(self,inodeID) -- rip --TODO make this only delete it from inode if all hard links are gone.
     if inodeID == 2 then--um... no.
         return 6
     end
@@ -666,75 +666,12 @@ local fs = {
     makeDir = function(_file) -- directories are just files
         rootFS:write(_file,{123,125},1) --123 = "{", 125 = "}". 1 is type for directory.
     end,
+    
         
     
     
-    --------------------------------------------
-    --THE FOLLOWING ARE SNIPPETS FROM BIOS.LUA--
-    --------------------------------------------
     
-    complete = function( sPath, sLocation, bIncludeFiles, bIncludeDirs )
-        bIncludeFiles = (bIncludeFiles ~= false)
-        bIncludeDirs = (bIncludeDirs ~= false)
-        local sDir = sLocation
-        local nStart = 1
-        local nSlash = string.find( sPath, "[/\\]", nStart )
-        if nSlash == 1 then
-            sDir = ""
-            nStart = 2
-        end
-        local sName
-        while not sName do
-            local nSlash = string.find( sPath, "[/\\]", nStart )
-            if nSlash then
-                local sPart = string.sub( sPath, nStart, nSlash - 1 )
-                sDir = cfs.combine( sDir, sPart )
-                nStart = nSlash + 1
-            else
-                sName = string.sub( sPath, nStart )
-            end
-        end
-        
-        if fs.isDir( sDir ) then
-            local tResults = {}
-            if bIncludeDirs and sPath == "" then
-                table.insert( tResults, "." )
-            end
-            if sDir ~= "" then
-                if sPath == "" then
-                    table.insert( tResults, (bIncludeDirs and "..") or "../" )
-                elseif sPath == "." then
-                    table.insert( tResults, (bIncludeDirs and ".") or "./" )
-                end
-            end
-            local tFiles = fs.list( sDir )
-            for n=1,#tFiles do
-                local sFile = tFiles[n]
-                if #sFile >= #sName and string.sub( sFile, 1, #sName ) == sName then
-                    local bIsDir = fs.isDir( cfs.combine( sDir, sFile ) )
-                    local sResult = string.sub( sFile, #sName + 1 )
-                    if bIsDir then
-                        table.insert( tResults, sResult .. "/" )
-                        if bIncludeDirs and #sResult > 0 then
-                            table.insert( tResults, sResult )
-                        end
-                    else
-                        if bIncludeFiles and #sResult > 0 then
-                            table.insert( tResults, sResult )
-                        end
-                    end
-                end
-            end
-            return tResults
-        end
-        return tEmpty
-    end,
     
-    ---------------------------------
-    --END OF SNIPPETS FROM BIOS.LUA--
-    ---------------------------------
-    
-    _ammount
     
 }
     
@@ -810,10 +747,81 @@ local function getFileSystemAndRealPath(_fakePath) -- figure out which fs to ret
     end
 end
 
- realFS = {} --the fs we pass to programs
+realFS = {} --the fs we pass to programs
+
+--------------------------------------------
+--THE FOLLOWING ARE SNIPPETS FROM BIOS.LUA--
+--------------------------------------------
+
+local function complete( _thefs, sPath, sLocation, bIncludeFiles, bIncludeDirs)
+    bIncludeFiles = (bIncludeFiles ~= false)
+    bIncludeDirs = (bIncludeDirs ~= false)
+    local sDir = sLocation
+    local nStart = 1
+    local nSlash = string.find( sPath, "[/\\]", nStart )
+    if nSlash == 1 then
+        sDir = ""
+        nStart = 2
+    end
+    local sName
+    while not sName do
+        local nSlash = string.find( sPath, "[/\\]", nStart )
+        if nSlash then
+            local sPart = string.sub( sPath, nStart, nSlash - 1 )
+            sDir = cfs.combine( sDir, sPart )
+            nStart = nSlash + 1
+        else
+            sName = string.sub( sPath, nStart )
+        end
+    end
+    
+    if _thefs.isDir( sDir ) then
+        local tResults = {}
+        if bIncludeDirs and sPath == "" then
+            table.insert( tResults, "." )
+        end
+        if sDir ~= "" then
+            if sPath == "" then
+                table.insert( tResults, (bIncludeDirs and "..") or "../" )
+            elseif sPath == "." then
+                table.insert( tResults, (bIncludeDirs and ".") or "./" )
+            end
+        end
+        local tFiles = _thefs.list( sDir )
+        for n=1,#tFiles do
+            local sFile = tFiles[n]
+            if #sFile >= #sName and string.sub( sFile, 1, #sName ) == sName then
+                local bIsDir = _thefs.isDir( cfs.combine( sDir, sFile ) )
+                local sResult = string.sub( sFile, #sName + 1 )
+                if bIsDir then
+                    table.insert( tResults, sResult .. "/" )
+                    if bIncludeDirs and #sResult > 0 then
+                        table.insert( tResults, sResult )
+                    end
+                else
+                    if bIncludeFiles and #sResult > 0 then
+                        table.insert( tResults, sResult )
+                    end
+                end
+            end
+        end
+        return tResults
+    end
+    return tEmpty
+end
+
+---------------------------------
+--END OF SNIPPETS FROM BIOS.LUA--
+--------------------------------- 
+ 
+ 
+ 
+ 
+ 
+ 
 local realFS_meta = {}
 realFS_meta.__index = function(tab,key)
-    if type(cfs[key]) == "function" then -- Everything in fs is a function...
+    if true then -- We have functions other than what is in type(cfs[key]) == "function" then -- Everything in fs is a function...
         --print(key)
         --sleep(0)
         return function(...)
@@ -821,13 +829,17 @@ realFS_meta.__index = function(tab,key)
             args[1],filesys = getFileSystemAndRealPath(args[1])
             if key == "getDir" or key == "getName" then
                 return cfs[key](table.unpack(args))
+            elseif key == "complete" then
+                args[2],filesys = getFileSystemAndRealPath(args[2])
+                return complete(filesys,table.unpack(args))
+       --     elseif key == "
             elseif key == "list" then
                 local list = filesys[key](args[1])
-                for i,_ in pairs(fileSystems) do
+                --[[for i,_ in pairs(fileSystems) do
                     if (cfs.getDir(i) == args[1]) and i ~= "" then
                         list[#list+1] = i
                     end
-                end
+                end]]
                 return list
             elseif (not args[2]) or key == "open" then
                 --print("returning")
