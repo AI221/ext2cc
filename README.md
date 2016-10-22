@@ -6,7 +6,7 @@ An "Ext2-like" filesystem for CC. Primarily for having a single filesystem acros
 
 ## Abstraction layers
 
-<image src="//i.imgur.com/WRfZpOdg.png"></image>
+<image src="i.imgur.com/WRfZpOdg.png"></image>
 
 ## Inodes
 
