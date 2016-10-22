@@ -1,27 +1,27 @@
 {
   {
     [ 2 ] = {
-      fileSize = 99,
+      fileSize = 29,
       blocks = {
         2,
       },
       type = 1,
       blocksSize = {
-        999,
+        29,
       },
     },
   },
   {
     blockLocations = {
-      "/rootFS/blocks/1",
-      "/rootFS/blocks/2",
-      "/rootFS/blocks/3",
-      "/rootFS/blocks/4",
-      "/rootFS/blocks/5",
-      "/rootFS/blocks/6",
-      "/rootFS/blocks/7",
-      "/rootFS/blocks/8",
-      "/rootFS/blocks/9",
+      "rootFS/blocks/1",
+      "rootFS/blocks/2",
+      "rootFS/blocks/3",
+      "rootFS/blocks/4",
+      "rootFS/blocks/5",
+      "rootFS/blocks/6",
+      "rootFS/blocks/7",
+      "rootFS/blocks/8",
+      "rootFS/blocks/9",
     },
     freeBlocks = {
       1,
