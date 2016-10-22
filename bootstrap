@@ -1,0 +1,99 @@
+--A short program that finds a single file in an Ext2CC partition, loads it, and runs it. In this file should be the Ext2CC driver. If this file stops executing, it is treated as an error. Upon an error, it this will display a white screen and yield forever.
+--CONFIG
+local fsLocation = "rootFS"
+local fakePathToRun = "test/a"
+
+--CODE:
+
+local function fatalError(message, code)
+    if term.setBackgroundColor then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+    end
+    print("A BOOTSTRAP ERRROR OCCURED")
+    print("Code: "..tostring(code))
+    print(message)
+    print("If this occurs on boot, insert startup disk. Please report this.")
+    while true do
+        coroutine.yield()
+    end
+end
+
+local file = fs.open(fs.combine(fsLocation,"inode"),"r")
+local _inode = file.readAll()
+file.close()
+
+local _inode = textutils.unserialize(_inode)
+local inode = _inode[1]  -- Lua tables start at 1. Confusing.
+local blockLocations = _inode[2].blockLocations
+--We don't need freeblocks.
+
+
+
+local function readFromBlock(block)
+    local file = fs.open(blockLocations[block],"r")
+    local returnThis = file.readAll()
+    file.close()
+    return returnThis
+end
+
+local function subOutFirstDir(_path)
+    if string.sub(_path,1,1) == "/" then -- fs.combine removes a / at the first part of the directory. easiest to just handle / on its own.
+        return "/",string.sub(_path,2,#_path)
+    end 
+    _path=fs.combine(_path,"")--get rid of any BS
+    local spot = string.find(_path,"/")
+    if not spot then
+        return _path
+    end
+    return string.sub(_path,1,spot-1),string.sub(_path,spot+1,#_path)
+end
+
+local locateInInode = function(_fakePath)    
+    local _,iLimiter = string.gsub(_fakePath,"/","")
+    local currentFile,currentInode,currentDirTable,isUsingFileAsDir
+    currentInode = 2 --Root is always 2. Otherwise, we would never be able to find anything
+    
+    for i=1,iLimiter+2 do
+        
+        local dircontents = ""
+        if not inode[currentInode] then
+            return 3
+        end
+        for i=1,#inode[currentInode].blocks do -- almost always runs just once unless a rarer case where a folders's split across drives
+            dircontents = dircontents..readFromBlock(inode[currentInode].blocks[i]) -- read the folder's file
+        end
+        
+        currentDirTable = textutils.unserialize(dircontents)
+        if not currentDirTable then --if this directory is empty
+            currentDirTable = {}
+        end
+        if (not currentDirTable[currentFile]) and i ~= 1 then
+            return 3
+        end
+        currentInode = currentDirTable[currentFile] or currentInode
+        
+        if _fakePath then --We check this because, upon reaching a final, non-directory path, there will be nothing left of _fakePath
+            currentFile, _fakePath = subOutFirstDir(_fakePath)
+            if inode[currentInode].type ~= 1 then --Since there is stuff left in this directory, this needs to come up as a file. 
+                return 4
+            end
+        end
+    
+    end
+    return 0,currentInode
+end
+--Get the inode
+local err,inodeID = locateInInode(fakePathToRun)
+if err == 3 then
+    fatalError("The file to run at startup did not exist.",3)
+elseif err == 4 then
+    fatalError("One of the directories the startup file was in was invalid",4)
+end
+local program = ""
+for i=1,#inode[inodeID].blocks do 
+    program = program..readFromBlock(inode[inodeID].blocks[i])
+end
+program = load(program,"startup_inExt2CC","t",getfenv())
+local _,err = pcall(program)
+fatalError("The program finished executing or errored. Error from program:\n"..tostring(err).."\n",0)

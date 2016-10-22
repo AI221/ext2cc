@@ -21,15 +21,15 @@ Blocks in Ext2CC share little in common with real-world blocks. First of all, ea
 ## Directories
 Directories are rather simple. They're a table that look like this:
 
-{
+    {
 
-    [".yournotsosecretfile"] = 3,
+        [".yournotsosecretfile"] = 3,
     
-    ["folder"] = 4,
+        ["folder"] = 4,
     
-    ["Folder"] = 5,
+        ["Folder"] = 5,
     
-}
+    }
 
 (yes, Ext2CC is case sensative)
 
